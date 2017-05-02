@@ -22,12 +22,14 @@ struct NodeType {
     }
 };
 
-template <typename Type, typename Allocator = std::allocator<NodeType<Type>>>
+template <typename Type, typename Allocator = std::allocator<Type>>
 class List {
 
 public:
 
     typedef NodeType<Type> Node;
+
+    typedef typename std::allocator_traits<Allocator>::template rebind_alloc<Node> AllocatorType;
 
     explicit List(const Allocator &allocator = Allocator());
 
@@ -57,9 +59,17 @@ public:
 
     void erase(Node *node);
 
+    Node* begin();
+
 private:
 
-    static Node* linkNodes(Node *firstNode, Node *lastNode,
+    Node* createNode(const Type &value);
+
+    Node* createNode(Type &&value);
+
+    void destroyNode(Node *node);
+
+    Node* linkNodes(Node *firstNode, Node *lastNode,
                            bool returnFirst = true);
 
     void fixEndPointers(Node* &brokenPointer, Node* &correctPointer);
@@ -69,16 +79,23 @@ private:
 
     size_t size_;
 
-    Allocator allocator_;
+    AllocatorType allocator_;
 
 };
 
 template <typename Type, typename Allocator>
 List<Type, Allocator>::List(const Allocator &allocator) {
-    allocator_ = allocator;
+    allocator_ = AllocatorType(allocator);
     head_ = tail_ = nullptr;
     size_ = 0;
 }
+
+template <typename Type, typename Allocator>
+List<Type, Allocator>::List(size_t count, const Type& value, const Allocator &allocator) : List(allocator) {
+    while (count--) {
+        push_back(value);
+    }
+} 
 
 template <typename Type, typename Allocator>
 size_t List<Type, Allocator>::size() const {
@@ -88,7 +105,7 @@ size_t List<Type, Allocator>::size() const {
 template <typename Type, typename Allocator>
 void List<Type, Allocator>::push_back(const Type &value) {
     ++size_;
-    tail_ = List<Type, Allocator>::linkNodes(tail_, new Node(value), false);
+    tail_ = linkNodes(tail_, createNode(value), false);
     fixEndPointers(head_, tail_);
 }
 
@@ -96,7 +113,7 @@ template <typename Type, typename Allocator>
 void List<Type, Allocator>::push_back(Type &&value) {
     ++size_;
     tail_ = List<Type, Allocator>::linkNodes(tail_,
-                                             new Node(std::move(value)), false);
+                                             createNode(std::move(value)), false);
     fixEndPointers(head_, tail_);
 }
 
@@ -107,7 +124,7 @@ void List<Type, Allocator>::pop_back() {
 
     Node *formerTail = tail_;
     tail_ = List<Type, Allocator>::linkNodes(tail_->previousNode, nullptr);
-    delete formerTail;
+    destroyNode(formerTail);
 
     fixEndPointers(head_, tail_);
 }
@@ -115,14 +132,14 @@ void List<Type, Allocator>::pop_back() {
 template <typename Type, typename Allocator>
 void List<Type, Allocator>::push_front(const Type &value) {
     ++size_;
-    head_ = List<Type, Allocator>::linkNodes(new Node(value), head_);
+    head_ = List<Type, Allocator>::linkNodes(createNode(value), head_);
     fixEndPointers(tail_, head_);
 }
 
 template <typename Type, typename Allocator>
 void List<Type, Allocator>::push_front(Type &&value) {
     ++size_;
-    tail_ = List<Type, Allocator>::linkNodes(new Node(std::move(value)),
+    tail_ = List<Type, Allocator>::linkNodes(createNode(std::move(value)),
                                              head_);
     fixEndPointers(tail_, head_);
 }
@@ -134,9 +151,29 @@ void List<Type, Allocator>::pop_front() {
 
     Node *formerHead = head_;
     head_ = List<Type, Allocator>::linkNodes(nullptr, head_->nextNode, false);
-    delete formerHead;
+    destroyNode(formerHead);
 
     fixEndPointers(tail_, head_);
+}
+
+template <typename Type, typename Allocator>
+typename List<Type, Allocator>::Node* List<Type, Allocator>::createNode(const Type &value) {
+    Node *newNode = allocator_.allocate(1);
+    new (newNode) Type(value);
+    return newNode;
+}
+
+
+template <typename Type, typename Allocator>
+typename List<Type, Allocator>::Node* List<Type, Allocator>::createNode(Type &&value) {
+    Node *newNode = allocator_.allocate(1);
+    new (newNode) Type(std::move(value));
+}
+
+template <typename Type, typename Allocator>
+void List<Type, Allocator>::destroyNode(Node *node) {
+    node->~Node();
+    allocator_.deallocate(node, 1);
 }
 
 template <typename Type, typename Allocator>
@@ -170,7 +207,7 @@ void List<Type, Allocator>::insert_after(Node *node, const Type &value) {
         push_back(value);
     } else {
         List<Type, Allocator>::linkNodes(node,
-                                         List<Type, Allocator>::linkNodes(new Node(value),
+                                         List<Type, Allocator>::linkNodes(createNode(value),
                                                                           node->nextNode));
     }
 }
@@ -182,7 +219,7 @@ void List<Type, Allocator>::insert_after(Node *node, Type &&value) {
     } else {
         List<Type, Allocator>::linkNodes(node,
                                          List<Type, Allocator>::linkNodes(
-                                                 new Node(std::move(value)),
+                                                 createNode(std::move(value)),
                                                  node->nextNode));
     }
 }
@@ -194,7 +231,7 @@ void List<Type, Allocator>::insert_before(Node *node, const Type &value) {
     } else {
         List<Type, Allocator>::linkNodes(List<Type, Allocator>::linkNodes(
                 node->previousNode,
-                new Node(value)), node);
+                createNode(value)), node);
     }
 }
 
@@ -205,7 +242,7 @@ void List<Type, Allocator>::insert_before(Node *node, Type &&value) {
     } else {
         List<Type, Allocator>::linkNodes(List<Type, Allocator>::linkNodes(
                 node->previousNode,
-                new Node(std::move(value))), node);
+                createNode(std::move(value))), node);
     }
 }
 
@@ -217,8 +254,13 @@ void List<Type, Allocator>::erase(Node *node) {
         pop_back();
     } else {
         List<Type, Allocator>::linkNodes(node->previousNode, node->nextNode);
-        delete node;
+        destroyNode(node);
     }
+}
+
+template <typename Type, typename Allocator>
+typename List<Type, Allocator>::Node* List<Type, Allocator>::begin() {
+    return head_;
 }
 
 #endif
